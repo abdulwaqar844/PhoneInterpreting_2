@@ -1,6 +1,5 @@
 import VoiceResponse from 'twilio/lib/twiml/VoiceResponse';
 
-import { departmentExists } from '../../../services/department/departmentExists';
 import { getInterpreters } from '../../../services/interpreter/getInterpreters';
 import { languageExists } from '../../../services/language/languageExists';
 
@@ -12,7 +11,6 @@ import { twilioClient } from '../../../config/twilio';
 import { redisClient } from '../../../config/redis';
 import { vars } from '../../../config/vars';
 import { logger } from '../../../config/logger';
-import { createRequest } from '../../../services/request/createRequest';
 
 const removeAndCallNewTargets = async ({
   originCallId,
@@ -133,117 +131,12 @@ const removeAndCallNewTargets = async ({
   );
 };
 
-export const departmentCodeRequest = convertMiddlewareToAsync(
-  async (req, res) => {
-    const twiml = new VoiceResponse();
-
-    const retriesAmount = Number(req.query.retriesAmount ?? 0);
-    const errorsAmount = Number(req.query.errorsAmount ?? 0);
-
-    if (retriesAmount >= 2) {
-      twiml.say(
-        {
-          language: 'it-IT',
-        },
-        'Siamo spiacenti, non è stato possibile elaborare la richiesta. La invitiamo a riprovare più tardi.',
-      );
-
-      twiml.hangup();
-
-      res.type('text/xml');
-      res.send(twiml.toString());
-      return;
-    }
-
-    if (errorsAmount >= 3) {
-      twiml.say(
-        {
-          language: 'it-IT',
-        },
-        'Sono stati effettuati troppi tentativi non validi.' +
-          "La invitiamo a contattare l'assistenza o riprovare più tardi.",
-      );
-      twiml.hangup();
-
-      res.type('text/xml');
-      res.send(twiml.toString());
-      return;
-    }
-
-    const gather = twiml.gather({
-      numDigits: 3,
-      timeout: 15,
-      action:
-        `./departmentCodeValidation?retriesAmount=${retriesAmount}` +
-        `&errorsAmount=${errorsAmount}`,
-    });
-
-    const actionRetry = Boolean(req.query.actionRetry);
-    const actionError = Boolean(req.query.actionError);
-
-    let phraseToSay =
-      'Benvenuti al servizio di interpretariato telefonico dell’AUSL di Bologna' +
-      'Per favore, inserire il codice identificativo del reparto.';
-
-    if (actionRetry) {
-      phraseToSay =
-        'Non abbiamo ricevuto alcun input. Inserisca il codice adesso, per favore.';
-    }
-
-    if (actionError) {
-      phraseToSay = 'Il codice inserito non è valido. Si prega di riprovare.';
-    }
-
-    gather.say(
-      {
-        language: 'it-IT',
-      },
-      phraseToSay,
-    );
-
-    twiml.redirect(
-      `./departmentCodeRequest?retriesAmount=${retriesAmount + 1}` +
-        `&errorsAmount=${errorsAmount}&actionRetry=true`,
-    );
-
-    res.type('text/xml');
-    res.send(twiml.toString());
-  },
-);
-
-export const departmentCodeValidation = convertMiddlewareToAsync(
-  async (req, res) => {
-    const twiml = new VoiceResponse();
-
-    const retriesAmount = Number(req.query.retriesAmount ?? 0);
-    const errorsAmount = Number(req.query.errorsAmount ?? 0);
-
-    const departmentCode = Number(req.body.Digits);
-    // Save department code in Redis
-    const { CallSid: originCallId } = req.body;
-
-    if (departmentCode && departmentExists({ departmentCode })) {
-      await redisClient.set(`${originCallId}:departmentCode`, departmentCode);
-      twiml.redirect(`./languageCodeRequest?departmentCode=${departmentCode}`);
-    } else {
-      twiml.redirect(
-        `./departmentCodeRequest?retriesAmount=${retriesAmount}` +
-          `&errorsAmount=${errorsAmount + 1}&actionError=true`,
-      );
-    }
-
-    res.type('text/xml');
-    res.send(twiml.toString());
-  },
-);
-
 export const languageCodeRequest = convertMiddlewareToAsync(
   async (req, res) => {
     const twiml = new VoiceResponse();
 
     const retriesAmount = Number(req.query.retriesAmount ?? 0);
     const errorsAmount = Number(req.query.errorsAmount ?? 0);
-    const departmentCode = Number(req.query.departmentCode);
     if (retriesAmount >= 2) {
       twiml.say(
         {
@@ -280,9 +173,7 @@ export const languageCodeRequest = convertMiddlewareToAsync(
       timeout: 15,
       action:
         `./languageCodeValidation?retriesAmount=${retriesAmount}` +
-        `&errorsAmount=${
-          errorsAmount + 1
-        }&actionRetry=true&departmentCode=${departmentCode}`,
+        `&errorsAmount=${errorsAmount + 1}&actionRetry=true`,
     });
 
     const actionRetry = Boolean(req.query.actionRetry);
@@ -307,10 +198,11 @@ export const languageCodeRequest = convertMiddlewareToAsync(
       phraseToSay,
     );
 
-    twiml.redirect(`./languageCodeRequest?retriesAmount=${retriesAmount}&errorsAmount=${
-      errorsAmount + 1
-    }
-        &departmentCode=${departmentCode}`);
+    twiml.redirect(
+      `./languageCodeRequest?retriesAmount=${retriesAmount}&errorsAmount=${
+        errorsAmount + 1
+      }`,
+    );
 
     res.type('text/xml');
     res.send(twiml.toString());
@@ -323,22 +215,18 @@ export const languageCodeValidation = convertMiddlewareToAsync(
 
     const retriesAmount = Number(req.query.retriesAmount ?? 0);
     const errorsAmount = Number(req.query.errorsAmount ?? 0);
-    const departmentCode = Number(req.query.departmentCode);
-
     const languageCode = Number(req.body.Digits);
     const { CallSid: originCallId } = req.body;
 
     if (languageCode && languageExists({ languageCode })) {
       await redisClient.set(`${originCallId}:languageCode`, languageCode);
-      twiml.redirect(
-        `./callInterpreter?langaugeCode=${languageCode}&departmentCode=${departmentCode}`,
-      );
+      twiml.redirect(`./callInterpreter?langaugeCode=${languageCode}`);
     } else {
       twiml.redirect(
         `./languageCodeRequest?retriesAmount=${retriesAmount}` +
           `&errorsAmount=${
             errorsAmount + 1
-          }&actionError=true&departmentCode=${departmentCode}`,
+          }&actionError=true`,
       );
     }
 
@@ -353,13 +241,12 @@ export const callInterpreter = convertMiddlewareToAsync(async (req, res) => {
   // Store start time in Redis
 
   const langaugeCode = Number(req.query.langaugeCode);
-  const departmentCode = Number(req.query.departmentCode);
   let priority = 1;
   let fallbackCalled = false;
 
   twiml.dial().conference(
     {
-      statusCallback: `${TWILIO_WEBHOOK}/conferenceStatusResult?originCallId=${originCallId}&departmentCode=${departmentCode}&langaugeCode=${langaugeCode}`,
+      statusCallback: `${TWILIO_WEBHOOK}/conferenceStatusResult?originCallId=${originCallId}`,
       statusCallbackEvent: ['leave'],
       statusCallbackMethod: 'POST',
       endConferenceOnExit: true,
@@ -518,10 +405,8 @@ export const callStatusResult = convertMiddlewareToAsync(async (req) => {
 });
 
 export const conferenceStatusResult = convertMiddlewareToAsync(async (req) => {
-  const { StatusCallbackEvent, EndConferenceOnExit } = req.body;
+  const { StatusCallbackEvent } = req.body;
   const originCallId = String(req.query.originCallId ?? '');
-  const departmentCode = Number(req.query.departmentCode);
-  const languageCode = Number(req.query.langaugeCode);
   if (StatusCallbackEvent !== 'participant-leave') {
     return;
   }
@@ -538,31 +423,8 @@ export const conferenceStatusResult = convertMiddlewareToAsync(async (req) => {
     ),
   );
 
-  await redisClient.del(originCallId);
-  // const [
-  //     departmentCodes,
-  //     languageCode,
-  //
-  // ] = await Promise.all([
-  //     redisClient.get(`${originCallId}:departmentCode`),
-  //     redisClient.get(`${originCallId}:languageCode`),
-  // ]);
-  try {
-    await createRequest({
-      request: req.body,
-      EndConferenceOnExit,
-      originCallId: req.body?.CallSid,
-      departmentCode: Number(departmentCode),
-      languageCode: Number(languageCode),
-      conferenceSid: req.body?.ConferenceSid,
-    });
-  } catch (error) {
-    logger.error(`Failed to create call record: ${error}`);
-  }
-
   await Promise.all([
     redisClient.del(originCallId),
-    redisClient.del(`${originCallId}:departmentCode`),
     redisClient.del(`${originCallId}:languageCode`),
   ]);
 });

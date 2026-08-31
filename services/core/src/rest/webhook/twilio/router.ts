@@ -4,16 +4,6 @@ import * as controller from './controller';
 const twilioRouter = Router();
 
 twilioRouter.post(
-    '/departmentCodeRequest',
-    controller.departmentCodeRequest,
-);
-
-twilioRouter.post(
-    '/departmentCodeValidation',
-    controller.departmentCodeValidation,
-);
-
-twilioRouter.post(
     '/languageCodeRequest',
     controller.languageCodeRequest,
 );
