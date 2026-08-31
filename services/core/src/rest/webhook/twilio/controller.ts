@@ -339,6 +339,10 @@ export const machineDetectionResult = convertMiddlewareToAsync(
 
     if (AnsweredBy === 'unknown' || AnsweredBy === 'human') {
       const twiml = new VoiceResponse();
+      twiml.dial().conference(originCallId);
+      res.type('text/xml');
+      res.send(twiml.toString());
+
       const interpretersCallsSid = await redisClient.lRange(
         originCallId,
         0,
@@ -348,17 +352,16 @@ export const machineDetectionResult = convertMiddlewareToAsync(
         (interpreterCallSid) => interpreterCallSid !== targetCallId,
       );
 
-      let calls = await Promise.all(
+      await Promise.all(
         filteredInterpretersCallsSid.map((interpreterCallSid) => {
-          twilioClient.calls(interpreterCallSid).update({
+          return twilioClient.calls(interpreterCallSid).update({
             status: 'completed',
           });
         }),
       );
-      twiml.dial().conference(originCallId);
-      res.type('text/xml');
-      res.send(twiml.toString());
     } else {
+      res.sendStatus(204);
+
       await twilioClient.calls(targetCallId).update({
         status: 'completed',
       });
@@ -373,8 +376,10 @@ export const machineDetectionResult = convertMiddlewareToAsync(
   },
 );
 
-export const callStatusResult = convertMiddlewareToAsync(async (req) => {
+export const callStatusResult = convertMiddlewareToAsync(async (req, res) => {
   const { CallSid: targetCallId, CallStatus } = req.body;
+  res.sendStatus(204);
+
   const originCallId = String(req.query.originCallId ?? '');
   const langaugeCode = Number(req.query.langaugeCode);
   const priority = Number(req.query.priority);
@@ -402,30 +407,34 @@ export const callStatusResult = convertMiddlewareToAsync(async (req) => {
   }
 });
 
-export const conferenceStatusResult = convertMiddlewareToAsync(async (req) => {
-  const { StatusCallbackEvent } = req.body;
-  const originCallId = String(req.query.originCallId ?? '');
-  if (StatusCallbackEvent !== 'participant-leave') {
-    return;
-  }
+export const conferenceStatusResult = convertMiddlewareToAsync(
+  async (req, res) => {
+    res.sendStatus(204);
 
-  const participants = await twilioClient
-    .conferences(req.body.ConferenceSid)
-    .participants.list();
+    const { StatusCallbackEvent } = req.body;
+    const originCallId = String(req.query.originCallId ?? '');
+    if (StatusCallbackEvent !== 'participant-leave') {
+      return;
+    }
 
-  const data = await Promise.all(
-    participants.map(({ callSid }) =>
-      twilioClient.calls(callSid).update({
-        status: 'completed',
-      }),
-    ),
-  );
+    const participants = await twilioClient
+      .conferences(req.body.ConferenceSid)
+      .participants.list();
 
-  await Promise.all([
-    redisClient.del(originCallId),
-    redisClient.del(`${originCallId}:languageCode`),
-  ]);
-});
+    await Promise.all(
+      participants.map(({ callSid }) =>
+        twilioClient.calls(callSid).update({
+          status: 'completed',
+        }),
+      ),
+    );
+
+    await Promise.all([
+      redisClient.del(originCallId),
+      redisClient.del(`${originCallId}:languageCode`),
+    ]);
+  },
+);
 
 export const noAnswer = convertMiddlewareToAsync(async (req, res) => {
   const twiml = new VoiceResponse();
