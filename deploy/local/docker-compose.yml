@@ -1,0 +1,30 @@
+# version: '3'
+services:
+  redis:
+    image: redis
+    restart: unless-stopped
+    ports:
+      - 6379:6379
+    volumes:
+      - redis_data:/data
+
+  core:
+    container_name: hospital_phone_interpreter_core
+    restart: unless-stopped
+    depends_on:
+      - redis
+    build:
+      context: ../../services/core
+      dockerfile: Dockerfile.local
+    ports:
+      - '8000:8000'
+    volumes:
+      - ../../services/core:/app
+      - /app/node_modules
+    env_file:
+      - ../../.env
+    environment:
+      - REDIS_URI=redis://redis:6379
+
+volumes:
+  redis_data:
