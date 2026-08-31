@@ -114,7 +114,7 @@ const removeAndCallNewTargets = async ({
           `${TWILIO_WEBHOOK}/machineDetectionResult?originCallId=${originCallId}` +
           `&langaugeCode=${langaugeCode}&priority=${currentPriority}&fallbackCalled=${currentFallbackCalled}`,
         to: phone,
-        from: '+39800932464',
+        from: '+39800826523',
         machineDetection: 'Enable',
         machineDetectionTimeout: 10,
         statusCallback:
@@ -224,9 +224,7 @@ export const languageCodeValidation = convertMiddlewareToAsync(
     } else {
       twiml.redirect(
         `./languageCodeRequest?retriesAmount=${retriesAmount}` +
-          `&errorsAmount=${
-            errorsAmount + 1
-          }&actionError=true`,
+          `&errorsAmount=${errorsAmount + 1}&actionError=true`,
       );
     }
 
@@ -314,7 +312,7 @@ export const callInterpreter = convertMiddlewareToAsync(async (req, res) => {
           `${TWILIO_WEBHOOK}/machineDetectionResult?originCallId=${originCallId}` +
           `&langaugeCode=${langaugeCode}&priority=${priority}&fallbackCalled=${fallbackCalled}`,
         to: phone,
-        from: '+39800932464',
+        from: '+39800826523',
         machineDetection: 'Enable',
         machineDetectionTimeout: 10,
         statusCallback:
