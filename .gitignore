@@ -28,3 +28,7 @@ nsc
 deploy/local/docker-compose.local.yml
 
 services/core/drizzle
+.env
+languages_rows.csv
+mediator_rows.csv
+users_rows (5).csv
