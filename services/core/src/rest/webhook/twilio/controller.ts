@@ -134,7 +134,9 @@ const removeAndCallNewTargets = async ({
 
 export const languageCodeRequest = convertMiddlewareToAsync(
   async (req, res) => {
+    const requestStartedAt = Date.now();
     const twiml = new VoiceResponse();
+    const originCallId = String(req.body?.CallSid ?? 'unknown');
 
     const retriesAmount = Number(req.query.retriesAmount ?? 0);
     const errorsAmount = Number(req.query.errorsAmount ?? 0);
@@ -207,11 +209,16 @@ export const languageCodeRequest = convertMiddlewareToAsync(
 
     res.type('text/xml');
     res.send(twiml.toString());
+    logger.info(
+      `[Twilio][${originCallId}] languageCodeRequest completed in ${Date.now() - requestStartedAt}ms ` +
+        `(retries=${retriesAmount}, errors=${errorsAmount}, actionRetry=${actionRetry}, actionError=${actionError})`,
+    );
   },
 );
 
 export const languageCodeValidation = convertMiddlewareToAsync(
   async (req, res) => {
+    const requestStartedAt = Date.now();
     const twiml = new VoiceResponse();
 
     const retriesAmount = Number(req.query.retriesAmount ?? 0);
@@ -219,10 +226,24 @@ export const languageCodeValidation = convertMiddlewareToAsync(
     const languageCode = Number(req.body.Digits);
     const { CallSid: originCallId } = req.body;
 
+    logger.info(
+      `[Twilio][${originCallId}] languageCodeValidation received digits=${req.body.Digits} ` +
+        `(parsed=${languageCode})`,
+    );
+
     if (languageCode && languageExists({ languageCode })) {
+      logger.info(
+        `[Twilio][${originCallId}] language code ${languageCode} is valid, saving to Redis`,
+      );
       await redisClient.set(`${originCallId}:languageCode`, languageCode);
       twiml.redirect(`./callInterpreter?langaugeCode=${languageCode}`);
+      logger.info(
+        `[Twilio][${originCallId}] language code saved, redirecting to callInterpreter`,
+      );
     } else {
+      logger.warn(
+        `[Twilio][${originCallId}] invalid language code ${req.body.Digits}, redirecting to retry`,
+      );
       twiml.redirect(
         `./languageCodeRequest?retriesAmount=${retriesAmount}` +
           `&errorsAmount=${errorsAmount + 1}&actionError=true`,
@@ -231,10 +252,14 @@ export const languageCodeValidation = convertMiddlewareToAsync(
 
     res.type('text/xml');
     res.send(twiml.toString());
+    logger.info(
+      `[Twilio][${originCallId}] languageCodeValidation completed in ${Date.now() - requestStartedAt}ms`,
+    );
   },
 );
 
 export const callInterpreter = convertMiddlewareToAsync(async (req, res) => {
+  const requestStartedAt = Date.now();
   const twiml = new VoiceResponse();
   const { CallSid: originCallId } = req.body;
   // Store start time in Redis
@@ -242,6 +267,10 @@ export const callInterpreter = convertMiddlewareToAsync(async (req, res) => {
   const langaugeCode = Number(req.query.langaugeCode);
   let priority = 1;
   let fallbackCalled = false;
+
+  logger.info(
+    `[Twilio][${originCallId}] callInterpreter started for language=${langaugeCode}`,
+  );
 
   // Do not let a stale target list from a previous call affect this call
   await redisClient.del(originCallId);
@@ -262,15 +291,25 @@ export const callInterpreter = convertMiddlewareToAsync(async (req, res) => {
 
   res.type('text/xml');
   res.send(twiml.toString());
+  logger.info(
+    `[Twilio][${originCallId}] conference TwiML sent in ${Date.now() - requestStartedAt}ms; starting interpreter lookup`,
+  );
 
   let interpreters = [];
 
   do {
+    const lookupStartedAt = Date.now();
+    logger.info(
+      `[Twilio][${originCallId}] looking up interpreters for priority=${priority}, language=${langaugeCode}`,
+    );
     // eslint-disable-next-line no-await-in-loop
     interpreters = await getInterpreters({
       priority,
       languageCode: langaugeCode,
     });
+    logger.info(
+      `[Twilio][${originCallId}] interpreter lookup priority=${priority} returned ${interpreters.length} result(s) in ${Date.now() - lookupStartedAt}ms`,
+    );
     priority++;
   } while (interpreters.length === 0 && priority <= 5);
 
@@ -316,7 +355,10 @@ export const callInterpreter = convertMiddlewareToAsync(async (req, res) => {
 
   await Promise.all(
     validInterpreters.map(async ({ phone }) => {
-      logger.info(`Creating call to: ${phone}`);
+      const callStartedAt = Date.now();
+      logger.info(
+        `[Twilio][${originCallId}] creating outbound mediator call to ${phone}`,
+      );
       const createdCall = await twilioClient.calls.create({
         url:
           `${TWILIO_WEBHOOK}/machineDetectionResult?originCallId=${originCallId}` +
@@ -337,7 +379,14 @@ export const callInterpreter = convertMiddlewareToAsync(async (req, res) => {
       // Store each SID as soon as it is created. Status callbacks can arrive
       // before all calls in the batch have finished being created.
       await redisClient.lPush(originCallId, createdCall.sid);
+      logger.info(
+        `[Twilio][${originCallId}] outbound mediator call created sid=${createdCall.sid} in ${Date.now() - callStartedAt}ms`,
+      );
     }),
+  );
+
+  logger.info(
+    `[Twilio][${originCallId}] callInterpreter finished interpreter dispatch in ${Date.now() - requestStartedAt}ms`,
   );
 });
 

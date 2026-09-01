@@ -11,6 +11,11 @@ interface IArgs {
 }
 
 export const getInterpreters = async ({ priority, languageCode }: IArgs) => {
+  const startedAt = Date.now();
+  logger.info(
+    `[InterpreterLookup] started priority=${priority}, languageCode=${languageCode}`,
+  );
+
   // Fetch the language from the database
   const languageRecord = await db
     .select({
@@ -23,6 +28,9 @@ export const getInterpreters = async ({ priority, languageCode }: IArgs) => {
     .limit(1);
 
   if (languageRecord.length === 0) {
+    logger.warn(
+      `[InterpreterLookup] languageCode=${languageCode} was not found after ${Date.now() - startedAt}ms`,
+    );
     throw new Error('Language not found');
   }
   const languageToUse = languageRecord[0].languageName;
@@ -85,6 +93,10 @@ export const getInterpreters = async ({ priority, languageCode }: IArgs) => {
       return now >= slotStart && now <= slotEnd;
     });
   });
-  logger.info(`Filtered interpreters: ${JSON.stringify(filteredInterpreters)}`);
+  logger.info(
+    `[InterpreterLookup] completed priority=${priority}, languageCode=${languageCode}, ` +
+      `databaseResults=${interpreters.length}, availableResults=${filteredInterpreters.length}, ` +
+      `duration=${Date.now() - startedAt}ms`,
+  );
   return filteredInterpreters;
 };
