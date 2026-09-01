@@ -19,6 +19,11 @@ twilioRouter.post(
 );
 
 twilioRouter.post(
+    '/connecting',
+    controller.connecting,
+);
+
+twilioRouter.post(
     '/machineDetectionResult',
     controller.machineDetectionResult,
 );

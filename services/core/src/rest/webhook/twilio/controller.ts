@@ -69,6 +69,9 @@ const removeAndCallNewTargets = async ({
     currentPriority++;
   } while (interpreters.length === 0 && currentPriority <= 5);
 
+  const selectedPriority =
+    interpreters.length > 0 ? currentPriority - 1 : currentPriority;
+
   if (interpreters.length === 0 && currentPriority > 5) {
     if (!vars.fallbackPhoneNumber) {
       logger.error(
@@ -85,7 +88,7 @@ const removeAndCallNewTargets = async ({
   }
 
   logger.info(
-    `Priority: ${currentPriority}, Fallback called: ${currentFallbackCalled}`,
+    `Priority: ${selectedPriority}, Fallback called: ${currentFallbackCalled}`,
   );
 
   // Filter out interpreters without valid phone numbers
@@ -106,28 +109,26 @@ const removeAndCallNewTargets = async ({
     return;
   }
 
-  const createdCalls = await Promise.all(
-    validInterpreters.map(({ phone }) => {
+  await Promise.all(
+    validInterpreters.map(async ({ phone }) => {
       logger.info(`Creating call to: ${phone}`);
-      return twilioClient.calls.create({
+      const createdCall = await twilioClient.calls.create({
         url:
           `${TWILIO_WEBHOOK}/machineDetectionResult?originCallId=${originCallId}` +
-          `&langaugeCode=${langaugeCode}&priority=${currentPriority}&fallbackCalled=${currentFallbackCalled}`,
+          `&langaugeCode=${langaugeCode}&priority=${selectedPriority}&fallbackCalled=${currentFallbackCalled}`,
         to: phone,
         from: '+39800826523',
         machineDetection: 'Enable',
         machineDetectionTimeout: 10,
         statusCallback:
           `${TWILIO_WEBHOOK}/callStatusResult?originCallId=${originCallId}` +
-          `&langaugeCode=${langaugeCode}&priority=${currentPriority}&fallbackCalled=${currentFallbackCalled}`,
+          `&langaugeCode=${langaugeCode}&priority=${selectedPriority}&fallbackCalled=${currentFallbackCalled}`,
         statusCallbackMethod: 'POST',
-        timeout: 15,
+        timeout: 30,
       });
-    }),
-  );
 
-  await Promise.all(
-    createdCalls.map(({ sid }) => redisClient.lPush(originCallId, sid)),
+      await redisClient.lPush(originCallId, createdCall.sid);
+    }),
   );
 };
 
@@ -142,7 +143,7 @@ export const languageCodeRequest = convertMiddlewareToAsync(
         {
           language: 'it-IT',
         },
-        'Siamo spiacenti, non è stato possibile elaborare la richiesta. La invitiamo a riprovare più tardi.',
+        'Siamo spiacenti, non è stato possibile elaborare la richiesta. La invitiamo a riprovare più tardi',
       );
 
       twiml.hangup();
@@ -158,7 +159,7 @@ export const languageCodeRequest = convertMiddlewareToAsync(
           language: 'it-IT',
         },
         'Sono stati effettuati troppi tentativi non validi.' +
-          "La invitiamo a contattare l'assistenza o riprovare più tardi.",
+          "La invitiamo a contattare l'assistenza o riprovare più tardi",
       );
 
       twiml.hangup();
@@ -179,16 +180,16 @@ export const languageCodeRequest = convertMiddlewareToAsync(
     const actionRetry = Boolean(req.query.actionRetry);
     const actionError = Boolean(req.query.actionError);
 
-    let phraseToSay = 'Inserire ora il codice della lingua richiesta.';
+    let phraseToSay = 'Inserire ora il codice della lingua richiesta';
 
     if (actionRetry) {
       phraseToSay =
-        'Non abbiamo ricevuto alcun input. Inserisca il codice adesso, per favore.';
+        'Non abbiamo ricevuto alcun input. Inserisca il codice adesso, per favore';
     }
 
     if (actionError) {
       phraseToSay =
-        'Il codice lingua inserito non è valido. Si prega di riprovare.';
+        'Il codice lingua inserito non è valido. Si prega di riprovare';
     }
 
     gather.say(
@@ -242,6 +243,9 @@ export const callInterpreter = convertMiddlewareToAsync(async (req, res) => {
   let priority = 1;
   let fallbackCalled = false;
 
+  // Do not let a stale target list from a previous call affect this call
+  await redisClient.del(originCallId);
+
   twiml.dial().conference(
     {
       statusCallback: `${TWILIO_WEBHOOK}/conferenceStatusResult?originCallId=${originCallId}`,
@@ -250,6 +254,8 @@ export const callInterpreter = convertMiddlewareToAsync(async (req, res) => {
       endConferenceOnExit: true,
       maxParticipants: 2,
       record: 'record-from-start',
+      waitUrl: `${TWILIO_WEBHOOK}/connecting`,
+      waitMethod: 'POST',
     },
     originCallId,
   );
@@ -284,7 +290,11 @@ export const callInterpreter = convertMiddlewareToAsync(async (req, res) => {
     interpreters = [{ phone: vars.fallbackPhoneNumber }];
   }
 
-  logger.info(`Priority: ${priority}, Fallback called: ${fallbackCalled}`);
+  const selectedPriority = interpreters.length > 0 ? priority - 1 : priority;
+
+  logger.info(
+    `Priority: ${selectedPriority}, Fallback called: ${fallbackCalled}`,
+  );
 
   // Filter out interpreters without valid phone numbers
   const validInterpreters = interpreters.filter(({ phone }) => {
@@ -304,28 +314,30 @@ export const callInterpreter = convertMiddlewareToAsync(async (req, res) => {
     return;
   }
 
-  const createdCalls = await Promise.all(
-    validInterpreters.map(({ phone }) => {
+  await Promise.all(
+    validInterpreters.map(async ({ phone }) => {
       logger.info(`Creating call to: ${phone}`);
-      return twilioClient.calls.create({
+      const createdCall = await twilioClient.calls.create({
         url:
           `${TWILIO_WEBHOOK}/machineDetectionResult?originCallId=${originCallId}` +
-          `&langaugeCode=${langaugeCode}&priority=${priority}&fallbackCalled=${fallbackCalled}`,
+          `&langaugeCode=${langaugeCode}&priority=${selectedPriority}&fallbackCalled=${fallbackCalled}`,
         to: phone,
         from: '+39800826523',
         machineDetection: 'Enable',
         machineDetectionTimeout: 10,
         statusCallback:
           `${TWILIO_WEBHOOK}/callStatusResult?originCallId=${originCallId}` +
-          `&langaugeCode=${langaugeCode}&priority=${priority}&fallbackCalled=${fallbackCalled}`,
+          `&langaugeCode=${langaugeCode}&priority=${selectedPriority}&fallbackCalled=${fallbackCalled}`,
         statusCallbackMethod: 'POST',
-        timeout: 15,
+        // 15 seconds is often consumed by carrier setup and answering-machine
+        // detection, leaving the mediator almost no time to answer
+        timeout: 30,
       });
-    }),
-  );
 
-  await Promise.all(
-    createdCalls.map(({ sid }) => redisClient.lPush(originCallId, sid)),
+      // Store each SID as soon as it is created. Status callbacks can arrive
+      // before all calls in the batch have finished being created.
+      await redisClient.lPush(originCallId, createdCall.sid);
+    }),
   );
 });
 
@@ -442,11 +454,27 @@ export const noAnswer = convertMiddlewareToAsync(async (req, res) => {
     {
       language: 'it-IT',
     },
-    'Al momento non sono disponibili interpreti per la lingua selezionata.' +
-      'Si prega di riprovare più tardi.',
+    'Al momento non sono disponibili interpreti per la lingua selezionata. ' +
+      'Si prega di riprovare più tardi',
   );
 
   twiml.hangup();
+  res.type('text/xml');
+  res.send(twiml.toString());
+});
+
+export const connecting = convertMiddlewareToAsync(async (_req, res) => {
+  const twiml = new VoiceResponse();
+
+  twiml.say(
+    {
+      language: 'it-IT',
+    },
+    'Attendere prego, stiamo collegando un interprete',
+  );
+  twiml.pause({ length: 8 });
+  twiml.redirect(`${TWILIO_WEBHOOK}/connecting`);
+
   res.type('text/xml');
   res.send(twiml.toString());
 });

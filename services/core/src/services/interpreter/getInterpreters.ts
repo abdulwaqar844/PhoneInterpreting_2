@@ -21,15 +21,16 @@ export const getInterpreters = async ({ priority, languageCode }: IArgs) => {
     .from(Languages)
     .where(eq(Languages.language_code, languageCode))
     .limit(1);
+
   if (languageRecord.length === 0) {
     throw new Error('Language not found');
   }
   const languageToUse = languageRecord[0].languageName;
   const languageSelection = [
     eq(mediator.targetLanguage1, languageToUse),
-    eq(mediator.targetLanguage2, languageToUse),
-    eq(mediator.targetLanguage3, languageToUse),
-    eq(mediator.targetLanguage4, languageToUse),
+    // eq(mediator.targetLanguage2, languageToUse),
+    // eq(mediator.targetLanguage3, languageToUse),
+    // eq(mediator.targetLanguage4, languageToUse),
   ];
   const dateNow = toZonedTime(new Date(), 'Europe/Rome');
   const currentWeekDay = dateNow.getDay();
