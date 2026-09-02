@@ -1,62 +1,99 @@
 import { toZonedTime } from 'date-fns-tz';
 import { and, eq, or } from 'drizzle-orm';
-import { mediator, Languages } from '../../models';
+import { mediator } from '../../models';
 import { db } from '../../config/postgres';
+import { redisClient } from '../../config/redis';
 import { weekDayTimeSlot } from '../../const/interpreter/weekDayTimeSlot';
 import { logger } from '../../config/logger';
 
 interface IArgs {
   priority: number;
-  languageCode: number;
+  languageKey: string;
 }
 
-export const getInterpreters = async ({ priority, languageCode }: IArgs) => {
+type InterpreterCandidate = {
+  id: string;
+  email: string | null;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  priority: string | null;
+  timeSlot: string | null;
+};
+
+const INTERPRETER_CACHE_TTL_SECONDS = 24 * 60 * 60;
+
+export const getInterpreters = async ({ priority, languageKey }: IArgs) => {
   const startedAt = Date.now();
   logger.info(
-    `[InterpreterLookup] started priority=${priority}, languageCode=${languageCode}`,
+    `[InterpreterLookup] started priority=${priority}, languageKey=${languageKey}`,
   );
 
-  // Fetch the language from the database
-  const languageRecord = await db
-    .select({
-      languageName: Languages.id,
-      language: Languages.language_code,
-      languageCode: Languages.language_name,
-    })
-    .from(Languages)
-    .where(eq(Languages.language_code, languageCode))
-    .limit(1);
-
-  if (languageRecord.length === 0) {
-    logger.warn(
-      `[InterpreterLookup] languageCode=${languageCode} was not found after ${Date.now() - startedAt}ms`,
-    );
-    throw new Error('Language not found');
-  }
-  const languageToUse = languageRecord[0].languageName;
-  const languageSelection = [
-    eq(mediator.targetLanguage1, languageToUse),
-    // eq(mediator.targetLanguage2, languageToUse),
-    // eq(mediator.targetLanguage3, languageToUse),
-    // eq(mediator.targetLanguage4, languageToUse),
-  ];
   const dateNow = toZonedTime(new Date(), 'Europe/Rome');
   const currentWeekDay = dateNow.getDay();
   const timeSlotToUse = weekDayTimeSlot[currentWeekDay];
-  const interpreters = await db
-    .select({
-      id: mediator.id,
-      email: mediator.email,
-      firstName: mediator.firstName,
-      lastName: mediator.lastName,
-      phone: mediator.phone,
-      priority: mediator.priority,
-      timeSlot: mediator[timeSlotToUse],
-    })
-    .from(mediator)
-    .where(
-      and(eq(mediator.priority, String(priority)), or(...languageSelection)),
-    );
+  const cacheKey =
+    `interpreters:${encodeURIComponent(languageKey)}:${priority}:` +
+    timeSlotToUse;
+  let interpreters: InterpreterCandidate[] | undefined;
+
+  if (redisClient.isReady) {
+    try {
+      const cachedInterpreters = await redisClient.get(cacheKey);
+      if (cachedInterpreters) {
+        const parsed = JSON.parse(cachedInterpreters) as unknown;
+        if (Array.isArray(parsed)) {
+          interpreters = parsed as InterpreterCandidate[];
+          logger.info(
+            `[InterpreterLookup] Redis cache hit key=${cacheKey} results=${interpreters.length}`,
+          );
+        }
+      }
+    } catch (error) {
+      logger.warn(
+        `[InterpreterLookup] Redis read failed key=${cacheKey}; querying database`,
+        error,
+      );
+    }
+  }
+
+  if (!interpreters) {
+    const languageSelection = [eq(mediator.targetLanguage1, languageKey)];
+    interpreters = await db
+      .select({
+        id: mediator.id,
+        email: mediator.email,
+        firstName: mediator.firstName,
+        lastName: mediator.lastName,
+        phone: mediator.phone,
+        priority: mediator.priority,
+        timeSlot: mediator[timeSlotToUse],
+      })
+      .from(mediator)
+      .where(
+        and(
+          eq(mediator.priority, String(priority)),
+          eq(mediator.isActive, true),
+          or(...languageSelection),
+        ),
+      );
+
+    if (redisClient.isReady) {
+      try {
+        await redisClient.set(
+          cacheKey,
+          JSON.stringify(interpreters),
+          { EX: INTERPRETER_CACHE_TTL_SECONDS },
+        );
+      } catch (error) {
+        logger.warn(
+          `[InterpreterLookup] Redis write failed key=${cacheKey}`,
+          error,
+        );
+      }
+    }
+  }
+
   const filteredInterpreters = interpreters.filter((interpreter) => {
     const { timeSlot } = interpreter;
 
@@ -94,7 +131,7 @@ export const getInterpreters = async ({ priority, languageCode }: IArgs) => {
     });
   });
   logger.info(
-    `[InterpreterLookup] completed priority=${priority}, languageCode=${languageCode}, ` +
+    `[InterpreterLookup] completed priority=${priority}, languageKey=${languageKey}, ` +
       `databaseResults=${interpreters.length}, availableResults=${filteredInterpreters.length}, ` +
       `duration=${Date.now() - startedAt}ms`,
   );

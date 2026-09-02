@@ -1,47 +1,52 @@
 # Deployment
 
-## Local deployment
+## EC2 Instance Management Commands
 
-Copy `deploy/local/.env.example` to `deploy/local/.env` and fill environment variables.
+### Start/Restart and Build Containers
 
-Run this in the root folder of the project:
+From the root folder of the project:
 
-`docker-compose --compatibility -p project_name -f deploy/local/docker-compose.yml up --force-recreate --build`
-
-## Remote deployment (live)
-
-### Prerequisite:
-
-- Ubuntu 22.04 (or 20.04, 18.04)
-- [Install and configure docker](https://www.digitalocean.com/community/tutorials/how-to-install-and-use-docker-on-ubuntu-22-04)
-- [Install and configure gitlab runner](https://docs.gitlab.com/runner/install/)
-
-### Using gitlab-ci:
-
-- Create file `deploy/live/docker-compose.yml` (See `deploy/staging/docker-compose.yml` for reference)
-- Create pipeline `.gitlab-ci.yml`:
-
-```
-update_live:
-  stage: update_live
-  image: dind
-  tags:
-    - GITLAB_RUNNER_TAG
-  script:
-    - docker-compose --compatibility -p PROJECT_NAME_${CI_COMMIT_REF_NAME} -f deploy/live/docker-compose.yml up -d --force-recreate --build
-  environment:
-    name: ${CI_COMMIT_REF_NAME}
-  rules:
-    - if: $CI_COMMIT_REF_NAME =~ /^(live)$/
-      when: always
+```bash
+sudo docker compose -p hospital-phone -f deploy/live/docker-compose.yml up -d --build --force-recreate
 ```
 
-- Replace `GITLAB_RUNNER_TAG` with runner tag from gitlab runner configuration in `update_live` pipeline
-- Replace `PROJECT_NAME` with project name in `update_live` pipeline
-- Create CI/CD Variables:
-  - Open gitlab repo
-  - Go to `Settings => CI/CD`
-  - Expand `Variables`
-  - Add required variables
-- Commit and push changes to `live` branch
-- Check that pipeline successfully passed
+Or from the `deploy/live/` folder:
+
+```bash
+cd deploy/live/
+sudo docker compose up --build -d
+```
+
+### View Logs
+
+Follow all logs with timestamps:
+
+```bash
+sudo docker compose -p hospital-phone -f deploy/live/docker-compose.yml logs --tail=all --timestamps --follow
+```
+
+### Common Operations
+
+**Stop containers:**
+
+```bash
+sudo docker compose -p hospital-phone -f deploy/live/docker-compose.yml down
+```
+
+**Restart containers:**
+
+```bash
+sudo docker compose -p hospital-phone -f deploy/live/docker-compose.yml restart
+```
+
+**View running containers:**
+
+```bash
+sudo docker compose -p hospital-phone -f deploy/live/docker-compose.yml ps
+```
+
+**Remove old images and containers (cleanup):**
+
+```bash
+sudo docker system prune -a
+```
