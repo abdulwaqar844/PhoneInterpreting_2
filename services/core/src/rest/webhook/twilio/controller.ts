@@ -1,9 +1,11 @@
 /* eslint-disable indent */
 import VoiceResponse from 'twilio/lib/twiml/VoiceResponse';
+import { Response } from 'express';
 
 import { getInterpreters } from '../../../services/interpreter/getInterpreters';
 import {
   // eslint-disable-next-line @typescript-eslint/indent
+  getLanguageId,
   getLanguageKey,
   getSupportedLanguageNames,
 } from '../../../const/language/languageReference';
@@ -122,7 +124,7 @@ const removeAndCallNewTargets = async ({
           `${TWILIO_WEBHOOK}/machineDetectionResult?originCallId=${originCallId}` +
           `&languageKey=${encodeURIComponent(languageKey)}&priority=${selectedPriority}&fallbackCalled=${currentFallbackCalled}`,
         to: phone,
-        from: '+39800826523',
+        from: '+15085700966',
         machineDetection: 'Enable',
         machineDetectionTimeout: 10,
         statusCallback:
@@ -135,6 +137,20 @@ const removeAndCallNewTargets = async ({
       await redisClient.lPush(originCallId, createdCall.sid);
     }),
   );
+};
+
+const sendHangupResponse = (res: Response, twiml: VoiceResponse) => {
+  twiml.hangup();
+  res.type('text/xml');
+  res.send(twiml.toString());
+};
+
+const sendLanguageErrorResponse = (res: Response, twiml: VoiceResponse) => {
+  twiml.say(
+    { language: 'en-US' },
+    'Sorry, we could not recognize or support that language. Please try again later.',
+  );
+  sendHangupResponse(res, twiml);
 };
 
 export const languageCodeRequest = convertMiddlewareToAsync(
@@ -153,14 +169,17 @@ export const languageCodeRequest = convertMiddlewareToAsync(
         method: 'POST',
         hints: supportedLanguageNames.join(','),
       });
-      gather.say(
-        { language: 'en-US' },
-        'Please say the language you need.',
-      );
+      gather.say({ language: 'en-US' }, 'Please say the language you need.');
     } catch (error) {
-      logger.error(`[Twilio][${originCallId}] language list lookup failed`, error);
+      logger.error(
+        `[Twilio][${originCallId}] language list lookup failed`,
+        error,
+      );
       if (vars.fallbackPhoneNumber) {
-        twiml.say({ language: 'en-US' }, 'Please wait while we connect you to an operator.');
+        twiml.say(
+          { language: 'en-US' },
+          'Please wait while we connect you to an operator.',
+        );
         twiml.dial(vars.fallbackPhoneNumber);
       } else {
         twiml.redirect(`${TWILIO_WEBHOOK}/noAnswer`);
@@ -203,7 +222,16 @@ export const languageCodeValidation = convertMiddlewareToAsync(
       logger.info(
         `[Twilio][${originCallId}] language key ${languageKey} is valid, saving to Redis`,
       );
-      await redisClient.set(`${originCallId}:languageKey`, languageKey);
+      try {
+        await redisClient.set(`${originCallId}:languageKey`, languageKey);
+      } catch (error) {
+        logger.error(
+          `[Twilio][${originCallId}] failed to save language, hanging up`,
+          error,
+        );
+        sendLanguageErrorResponse(res, twiml);
+        return;
+      }
       twiml.redirect(
         `./callInterpreter?languageKey=${encodeURIComponent(languageKey)}`,
       );
@@ -212,17 +240,13 @@ export const languageCodeValidation = convertMiddlewareToAsync(
       );
     } else {
       logger.warn(
-        `[Twilio][${originCallId}] unsupported or missing language, routing to fallback`,
+        `[Twilio][${originCallId}] unsupported or missing language, hanging up`,
       );
-      if (vars.fallbackPhoneNumber) {
-        twiml.say(
-          { language: 'en-US' },
-          'Please wait while we connect you to an operator.',
-        );
-        twiml.dial(vars.fallbackPhoneNumber);
-      } else {
-        twiml.redirect(`${TWILIO_WEBHOOK}/noAnswer`);
-      }
+      sendLanguageErrorResponse(res, twiml);
+      logger.info(
+        `[Twilio][${originCallId}] languageCodeValidation completed in ${Date.now() - requestStartedAt}ms`,
+      );
+      return;
     }
 
     res.type('text/xml');
@@ -237,8 +261,6 @@ export const callInterpreter = convertMiddlewareToAsync(async (req, res) => {
   const requestStartedAt = Date.now();
   const twiml = new VoiceResponse();
   const { CallSid: originCallId } = req.body;
-  // Store start time in Redis
-
   const languageKey = String(req.query.languageKey ?? '');
   let priority = 1;
   let fallbackCalled = false;
@@ -247,8 +269,70 @@ export const callInterpreter = convertMiddlewareToAsync(async (req, res) => {
     `[Twilio][${originCallId}] callInterpreter started for language=${languageKey}`,
   );
 
-  // Do not let a stale target list from a previous call affect this call
-  await redisClient.del(originCallId);
+  let interpreters = [];
+
+  try {
+    if (!languageKey) {
+      logger.warn(`[Twilio][${originCallId}] no language provided, hanging up`);
+      sendLanguageErrorResponse(res, twiml);
+      return;
+    }
+
+    if (!(await getLanguageId(languageKey))) {
+      logger.warn(
+        `[Twilio][${originCallId}] unsupported language=${languageKey}, hanging up`,
+      );
+      sendLanguageErrorResponse(res, twiml);
+      return;
+    }
+
+    do {
+      const lookupStartedAt = Date.now();
+      logger.info(
+        `[Twilio][${originCallId}] looking up interpreters for priority=${priority}, language=${languageKey}`,
+      );
+      // eslint-disable-next-line no-await-in-loop
+      interpreters = await getInterpreters({
+        priority,
+        languageKey,
+      });
+      logger.info(
+        `[Twilio][${originCallId}] interpreter lookup priority=${priority} returned ${interpreters.length} result(s) in ${Date.now() - lookupStartedAt}ms`,
+      );
+      priority++;
+    } while (interpreters.length === 0 && priority <= 5);
+  } catch (error) {
+    logger.error(
+      `[Twilio][${originCallId}] interpreter lookup failed, hanging up`,
+      error,
+    );
+    sendHangupResponse(res, twiml);
+    return;
+  }
+
+  if (interpreters.length === 0 && priority > 5) {
+    if (!vars.fallbackPhoneNumber) {
+      logger.error(
+        `[Twilio][${originCallId}] no interpreters available, hanging up`,
+      );
+      sendHangupResponse(res, twiml);
+      return;
+    }
+    fallbackCalled = true;
+    interpreters = [{ phone: vars.fallbackPhoneNumber }];
+  }
+
+  // Do not let a stale target list from a previous call affect this call.
+  try {
+    await redisClient.del(originCallId);
+  } catch (error) {
+    logger.error(
+      `[Twilio][${originCallId}] failed to clear call state, hanging up`,
+      error,
+    );
+    sendHangupResponse(res, twiml);
+    return;
+  }
 
   twiml.dial().conference(
     {
@@ -269,40 +353,6 @@ export const callInterpreter = convertMiddlewareToAsync(async (req, res) => {
   logger.info(
     `[Twilio][${originCallId}] conference TwiML sent in ${Date.now() - requestStartedAt}ms; starting interpreter lookup`,
   );
-
-  let interpreters = [];
-
-  do {
-    const lookupStartedAt = Date.now();
-    logger.info(
-      `[Twilio][${originCallId}] looking up interpreters for priority=${priority}, language=${languageKey}`,
-    );
-    // eslint-disable-next-line no-await-in-loop
-    interpreters = await getInterpreters({
-      priority,
-      languageKey,
-    });
-    logger.info(
-      `[Twilio][${originCallId}] interpreter lookup priority=${priority} returned ${interpreters.length} result(s) in ${Date.now() - lookupStartedAt}ms`,
-    );
-    priority++;
-  } while (interpreters.length === 0 && priority <= 5);
-
-  if (interpreters.length === 0 && priority > 5) {
-    if (!vars.fallbackPhoneNumber) {
-      logger.error(
-        'No interpreters available and fallback phone number is not configured',
-      );
-      // Redirect to no answer message
-      await twilioClient.calls(originCallId).update({
-        url: `${TWILIO_WEBHOOK}/noAnswer`,
-        method: 'POST',
-      });
-      return;
-    }
-    fallbackCalled = true;
-    interpreters = [{ phone: vars.fallbackPhoneNumber }];
-  }
 
   const selectedPriority = interpreters.length > 0 ? priority - 1 : priority;
 
@@ -339,7 +389,7 @@ export const callInterpreter = convertMiddlewareToAsync(async (req, res) => {
           `${TWILIO_WEBHOOK}/machineDetectionResult?originCallId=${originCallId}` +
           `&languageKey=${encodeURIComponent(languageKey)}&priority=${selectedPriority}&fallbackCalled=${fallbackCalled}`,
         to: phone,
-        from: '+39800826523',
+        from: '+15085700966',
         machineDetection: 'Enable',
         machineDetectionTimeout: 10,
         statusCallback:
@@ -472,19 +522,9 @@ export const conferenceStatusResult = convertMiddlewareToAsync(
   },
 );
 
-export const noAnswer = convertMiddlewareToAsync(async (req, res) => {
+export const noAnswer = convertMiddlewareToAsync(async (_req, res) => {
   const twiml = new VoiceResponse();
-  twiml.say(
-    {
-      language: 'en-US',
-    },
-    'No interpreters are currently available for the selected language. ' +
-      'Please try again later.',
-  );
-
-  twiml.hangup();
-  res.type('text/xml');
-  res.send(twiml.toString());
+  sendHangupResponse(res, twiml);
 });
 
 export const connecting = convertMiddlewareToAsync(async (_req, res) => {

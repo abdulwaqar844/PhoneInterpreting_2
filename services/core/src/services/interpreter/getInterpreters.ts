@@ -5,6 +5,7 @@ import { db } from '../../config/postgres';
 import { redisClient } from '../../config/redis';
 import { weekDayTimeSlot } from '../../const/interpreter/weekDayTimeSlot';
 import { logger } from '../../config/logger';
+import { getLanguageId } from '../../const/language/languageReference';
 
 interface IArgs {
   priority: number;
@@ -58,7 +59,13 @@ export const getInterpreters = async ({ priority, languageKey }: IArgs) => {
   }
 
   if (!interpreters) {
-    const languageSelection = [eq(mediator.targetLanguage1, languageKey)];
+    const languageId = await getLanguageId(languageKey);
+    if (!languageId) {
+      logger.warn(`[InterpreterLookup] unsupported language=${languageKey}`);
+      return [];
+    }
+
+    const languageSelection = [eq(mediator.targetLanguage1, languageId)];
     interpreters = await db
       .select({
         id: mediator.id,

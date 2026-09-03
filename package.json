@@ -8,7 +8,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "ssh://git@ssh.s2.git.fora-soft.com:8048/boilerplates/starter-kit.git"
+    "url": ""
   },
   "devDependencies": {
     "@commitlint/cli": "^17.2.0",

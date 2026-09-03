@@ -29,6 +29,7 @@ const normalize = (value: string) =>
     .trim();
 
 type LanguageRecord = {
+  id: string;
   languageName: string;
 };
 
@@ -53,6 +54,7 @@ const loadLanguages = async (): Promise<LanguageRecord[]> => {
                 (language) =>
                   typeof language === 'object' &&
                   language !== null &&
+                  typeof (language as LanguageRecord).id === 'string' &&
                   typeof (language as LanguageRecord).languageName === 'string',
               )
             ) {
@@ -66,7 +68,10 @@ const loadLanguages = async (): Promise<LanguageRecord[]> => {
       }
 
       const rows = await db
-        .select({ languageName: Languages.language_name })
+        .select({
+          id: Languages.id,
+          languageName: Languages.language_name,
+        })
         .from(Languages)
         .orderBy(Languages.language_name);
       languageCache = rows;
@@ -101,6 +106,16 @@ export const refreshLanguageCache = async () => {
 
 export const getSupportedLanguageNames = async (): Promise<string[]> =>
   (await loadLanguages()).map(({ languageName }) => languageName);
+
+export const getLanguageId = async (
+  languageName: string,
+): Promise<string | undefined> => {
+  const normalizedLanguageName = normalize(languageName);
+  return (await loadLanguages()).find(
+    ({ languageName: supportedLanguageName }) =>
+      normalize(supportedLanguageName) === normalizedLanguageName,
+  )?.id;
+};
 
 export const getLanguageKey = async (
   spokenLanguage: unknown,

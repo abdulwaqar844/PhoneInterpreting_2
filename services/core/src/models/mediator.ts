@@ -14,7 +14,7 @@ export const mediator = pgTable('mediator', {
   lastName: varchar('lastName').notNull(),
   email: text('email'),
   phone: varchar('phone').notNull(),
-  targetLanguage1: text('targetLanguage1'),
+  targetLanguage1: uuid('targetLanguage1'),
 
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().notNull(),
