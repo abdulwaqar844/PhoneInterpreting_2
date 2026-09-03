@@ -18,6 +18,16 @@ const aliases: Record<string, string[]> = {
   Spagnolo: ['spagnolo', 'español', 'espanol', 'spanish'],
   Hindi: ['hindi'],
   Polacco: ['polacco', 'polish'],
+  Cinese: ['cinese', 'chinese', 'mandarin', '中文'],
+  Urdu: ['urdu', 'اردو'],
+  Portoghese: ['portoghese', 'portuguese', 'português', 'portugues'],
+  Bengalese: ['bengalese', 'bengali', 'বাংলা'],
+  Pashtu: ['pashtu', 'pashto', 'پښتو'],
+  Turco: ['turco', 'turkish'],
+  Somalo: ['somalo', 'somali', 'soomaali'],
+  Punjabi: ['punjabi', 'ਪੰਜਾਬੀ'],
+  Filippino: ['filippino', 'filipino', 'tagalog'],
+  Inglese: ['inglese', 'english'],
 };
 
 const normalize = (value: string) =>
@@ -33,7 +43,7 @@ type LanguageRecord = {
   languageName: string;
 };
 
-const LANGUAGE_CACHE_KEY = 'languages:all:v1';
+const LANGUAGE_CACHE_KEY = 'languages:all:v2';
 const LANGUAGE_CACHE_TTL_SECONDS = 24 * 60 * 60;
 
 let languageCache: LanguageRecord[] | undefined;

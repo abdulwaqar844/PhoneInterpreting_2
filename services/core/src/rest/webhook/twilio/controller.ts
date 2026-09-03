@@ -131,7 +131,7 @@ const removeAndCallNewTargets = async ({
           `${TWILIO_WEBHOOK}/callStatusResult?originCallId=${originCallId}` +
           `&languageKey=${encodeURIComponent(languageKey)}&priority=${selectedPriority}&fallbackCalled=${currentFallbackCalled}`,
         statusCallbackMethod: 'POST',
-        timeout: 30,
+        timeout: 40,
       });
 
       await redisClient.lPush(originCallId, createdCall.sid);
@@ -153,11 +153,29 @@ const sendLanguageErrorResponse = (res: Response, twiml: VoiceResponse) => {
   sendHangupResponse(res, twiml);
 };
 
+const sendFallbackResponse = (
+  res: Response,
+  twiml: VoiceResponse,
+  fallbackPhoneNumber: string,
+) => {
+  twiml.say(
+    { language: 'en-US' },
+    'We could not recognize a supported language. Please wait while we connect you to an operator.',
+  );
+  twiml.dial(fallbackPhoneNumber);
+  res.type('text/xml');
+  res.send(twiml.toString());
+};
+
+const MAX_LANGUAGE_ATTEMPTS = 2;
+
 export const languageCodeRequest = convertMiddlewareToAsync(
   async (req, res) => {
     const requestStartedAt = Date.now();
     const twiml = new VoiceResponse();
     const originCallId = String(req.body?.CallSid ?? 'unknown');
+    const attempt = Number(req.query.attempt ?? 0);
+    const isRetry = Number.isFinite(attempt) && attempt > 0;
 
     try {
       const supportedLanguageNames = await getSupportedLanguageNames();
@@ -169,7 +187,12 @@ export const languageCodeRequest = convertMiddlewareToAsync(
         method: 'POST',
         hints: supportedLanguageNames.join(','),
       });
-      gather.say({ language: 'en-US' }, 'Please say the language you need.');
+      gather.say(
+        { language: 'en-US' },
+        isRetry
+          ? 'We did not recognize a supported language. Please say the language you need again.'
+          : 'Please say the language you need.',
+      );
     } catch (error) {
       logger.error(
         `[Twilio][${originCallId}] language list lookup failed`,
@@ -204,12 +227,15 @@ export const languageCodeValidation = convertMiddlewareToAsync(
     );
     const spokenLanguage = req.body.SpeechResult;
     const { CallSid: originCallId } = req.body;
+    const attempt = Number(req.query.attempt ?? 0);
     let languageKey: string | undefined;
+    let languageLookupFailed = false;
     try {
       languageKey = await getLanguageKey(spokenLanguage);
     } catch (error) {
+      languageLookupFailed = true;
       logger.error(
-        `[Twilio][${originCallId}] language lookup failed; routing to fallback`,
+        `[Twilio][${originCallId}] language lookup failed; hanging up`,
         error,
       );
     }
@@ -239,10 +265,28 @@ export const languageCodeValidation = convertMiddlewareToAsync(
         `[Twilio][${originCallId}] language code saved, redirecting to callInterpreter`,
       );
     } else {
-      logger.warn(
-        `[Twilio][${originCallId}] unsupported or missing language, hanging up`,
-      );
-      sendLanguageErrorResponse(res, twiml);
+      if (
+        !languageLookupFailed &&
+        Number.isFinite(attempt) &&
+        attempt < MAX_LANGUAGE_ATTEMPTS - 1
+      ) {
+        const nextAttempt = attempt + 1;
+        logger.warn(
+          `[Twilio][${originCallId}] unsupported or missing language, requesting retry ${nextAttempt}/${MAX_LANGUAGE_ATTEMPTS}`,
+        );
+        twiml.redirect(
+          `${TWILIO_WEBHOOK}/languageCodeRequest?attempt=${nextAttempt}`,
+        );
+      } else {
+        logger.warn(
+          `[Twilio][${originCallId}] unsupported or missing language after ${MAX_LANGUAGE_ATTEMPTS} attempts, routing to fallback`,
+        );
+        if (vars.fallbackPhoneNumber) {
+          sendFallbackResponse(res, twiml, vars.fallbackPhoneNumber);
+        } else {
+          sendLanguageErrorResponse(res, twiml);
+        }
+      }
       logger.info(
         `[Twilio][${originCallId}] languageCodeValidation completed in ${Date.now() - requestStartedAt}ms`,
       );
@@ -341,7 +385,6 @@ export const callInterpreter = convertMiddlewareToAsync(async (req, res) => {
       statusCallbackMethod: 'POST',
       endConferenceOnExit: true,
       maxParticipants: 2,
-      record: 'record-from-start',
       waitUrl: `${TWILIO_WEBHOOK}/connecting`,
       waitMethod: 'POST',
     },
@@ -398,7 +441,7 @@ export const callInterpreter = convertMiddlewareToAsync(async (req, res) => {
         statusCallbackMethod: 'POST',
         // 15 seconds is often consumed by carrier setup and answering-machine
         // detection, leaving the mediator almost no time to answer
-        timeout: 30,
+        timeout: 40,
       });
 
       // Store each SID as soon as it is created. Status callbacks can arrive
