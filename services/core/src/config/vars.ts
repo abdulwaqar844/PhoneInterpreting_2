@@ -22,5 +22,9 @@ export const vars = Object.freeze({
       'http://com.twilio.sounds.music.s3.amazonaws.com/MARKOVICHAMP-Borghestral.mp3',
     ),
   },
+  mediationOrderHostUrl: parseString(
+    process.env.MEDIATION_ORDER_HOST_URL,
+    '',
+  ),
   fallbackPhoneNumber: parseString(process.env.FALLBACK_PHONE_NUMBER, ''),
 });

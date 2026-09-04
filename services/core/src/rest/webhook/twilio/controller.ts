@@ -1,6 +1,7 @@
 /* eslint-disable indent */
 import VoiceResponse from 'twilio/lib/twiml/VoiceResponse';
 import { Response } from 'express';
+import { eq } from 'drizzle-orm';
 
 import { getInterpreters } from '../../../services/interpreter/getInterpreters';
 import {
@@ -19,6 +20,139 @@ import { redisClient } from '../../../config/redis';
 import { vars } from '../../../config/vars';
 import { logger } from '../../../config/logger';
 import { DEFAULT_CLIENT, getClientPin } from '../../../const/client/clientPins';
+import { db } from '../../../config/postgres';
+import { mediator } from '../../../models';
+
+const CREATE_MEDIATION_ORDER_MUTATION = `
+  mutation CreateMediationOrder($details: mediationCallDetails!) {
+    createMediationOrderFromCall(mediationCallDetails: $details) {
+      id
+    }
+  }
+`;
+
+type MediationOrderDetails = {
+  originCallId: string;
+  conferenceSid: string;
+  callerPhone: string;
+  language: string;
+  mediatorCallSid: string;
+  mediatorPhone: string;
+  mediatorEmail: string | null;
+  callStartedAt: string;
+  callEndedAt: string;
+  durationSeconds: number;
+  conferenceStatus: string;
+};
+
+const submitMediationOrder = async (details: MediationOrderDetails) => {
+  if (!vars.mediationOrderHostUrl) {
+    throw new Error('MEDIATION_ORDER_HOST_URL is not configured');
+  }
+
+  const response = await fetch(vars.mediationOrderHostUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      query: CREATE_MEDIATION_ORDER_MUTATION,
+      variables: { details },
+    }),
+  });
+
+  const result = await response.json() as {
+    errors?: Array<{ message?: string }>;
+  };
+
+  if (!response.ok || result.errors?.length) {
+    const message = result.errors?.map(({ message }) => message).join('; ');
+    throw new Error(
+      `Mediation order request failed (${response.status})${message ? `: ${message}` : ''}`,
+    );
+  }
+};
+
+const saveCompletedConferenceOrder = async ({
+  originCallId,
+  conferenceSid,
+  languageKey,
+  conferenceStatus,
+  fallbackCalled,
+}: {
+  originCallId: string;
+  conferenceSid: string;
+  languageKey: string;
+  conferenceStatus: string;
+  fallbackCalled: boolean;
+}) => {
+  if (fallbackCalled) {
+    logger.info(
+      `[Twilio][${originCallId}] fallback call completed; mediation order not submitted`,
+    );
+    return;
+  }
+
+  const mediatorCallSid = await redisClient.get(
+    `${originCallId}:mediatorCallSid`,
+  );
+
+  if (!mediatorCallSid) {
+    logger.info(
+      `[Twilio][${originCallId}] no connected mediator found; mediation order not submitted`,
+    );
+    return;
+  }
+
+  const orderLockKey = `${originCallId}:mediationOrderSubmitted`;
+  const lock = await redisClient.set(orderLockKey, 'processing', {
+    NX: true,
+    EX: 24 * 60 * 60,
+  });
+
+  if (lock !== 'OK') {
+    logger.info(
+      `[Twilio][${originCallId}] mediation order already submitted or in progress`,
+    );
+    return;
+  }
+
+  try {
+    const [originCall, mediatorCall] = await Promise.all([
+      twilioClient.calls(originCallId).fetch(),
+      twilioClient.calls(mediatorCallSid).fetch(),
+    ]);
+    const mediatorPhone = mediatorCall.to;
+    const mediatorResult = await db
+      .select({ email: mediator.email })
+      .from(mediator)
+      .where(eq(mediator.phone, mediatorPhone))
+      .limit(1);
+    const callEndedAt = originCall.endTime ?? new Date();
+    const durationSeconds = Number(originCall.duration ?? 0);
+
+    await submitMediationOrder({
+      originCallId,
+      conferenceSid,
+      callerPhone: originCall.from,
+      language: languageKey,
+      mediatorCallSid,
+      mediatorPhone,
+      mediatorEmail: mediatorResult[0]?.email ?? null,
+      callStartedAt: (originCall.startTime ?? callEndedAt).toISOString(),
+      callEndedAt: callEndedAt.toISOString(),
+      durationSeconds: Number.isFinite(durationSeconds) ? durationSeconds : 0,
+      conferenceStatus,
+    });
+
+    logger.info(
+      `[Twilio][${originCallId}] mediation order submitted conferenceSid=${conferenceSid} mediatorCallSid=${mediatorCallSid}`,
+    );
+  } catch (error) {
+    await redisClient.del(orderLockKey);
+    throw error;
+  }
+};
 
 const removeAndCallNewTargets = async ({
   originCallId,
@@ -469,7 +603,9 @@ export const callInterpreter = convertMiddlewareToAsync(async (req, res) => {
 
   twiml.dial().conference(
     {
-      statusCallback: `${TWILIO_WEBHOOK}/conferenceStatusResult?originCallId=${originCallId}`,
+      statusCallback:
+        `${TWILIO_WEBHOOK}/conferenceStatusResult?originCallId=${originCallId}` +
+        `&languageKey=${encodeURIComponent(languageKey)}&fallbackCalled=${fallbackCalled}`,
       statusCallbackEvent: ['leave'],
       statusCallbackMethod: 'POST',
       endConferenceOnExit: true,
@@ -563,6 +699,21 @@ export const machineDetectionResult = convertMiddlewareToAsync(
       res.type('text/xml');
       res.send(twiml.toString());
 
+      if (!fallbackCalled) {
+        try {
+          await redisClient.set(
+            `${originCallId}:mediatorCallSid`,
+            targetCallId,
+            { EX: 24 * 60 * 60 },
+          );
+        } catch (error) {
+          logger.warn(
+            `[Twilio][${originCallId}] failed to save connected mediator SID`,
+            error,
+          );
+        }
+      }
+
       const interpretersCallsSid = await redisClient.lRange(
         originCallId,
         0,
@@ -636,9 +787,12 @@ export const conferenceStatusResult = convertMiddlewareToAsync(
 
     const { StatusCallbackEvent } = req.body;
     const originCallId = String(req.query.originCallId ?? '');
+    const languageKey = String(req.query.languageKey ?? '');
+    const fallbackCalled = req.query.fallbackCalled === 'true';
+    const conferenceSid = String(req.body?.ConferenceSid ?? '');
     logger.info(
       `[Twilio][${originCallId}] conference status callback received: ` +
-        `event=${StatusCallbackEvent ?? 'unknown'}, conferenceSid=${req.body?.ConferenceSid ?? 'unknown'}`,
+        `event=${StatusCallbackEvent ?? 'unknown'}, conferenceSid=${conferenceSid}`,
     );
 
     if (
@@ -649,8 +803,27 @@ export const conferenceStatusResult = convertMiddlewareToAsync(
     }
 
     const participants = await twilioClient
-      .conferences(req.body.ConferenceSid)
+      .conferences(conferenceSid)
       .participants.list();
+
+    if (!fallbackCalled && languageKey && conferenceSid) {
+      try {
+        await saveCompletedConferenceOrder({
+          originCallId,
+          conferenceSid,
+          languageKey,
+          fallbackCalled,
+          conferenceStatus: String(
+            req.body?.ConferenceStatus ?? StatusCallbackEvent ?? 'completed',
+          ),
+        });
+      } catch (error) {
+        logger.error(
+          `[Twilio][${originCallId}] failed to submit mediation order`,
+          error,
+        );
+      }
+    }
 
     await Promise.all(
       participants.map(({ callSid }) =>
@@ -663,6 +836,7 @@ export const conferenceStatusResult = convertMiddlewareToAsync(
     await Promise.all([
       redisClient.del(originCallId),
       redisClient.del(`${originCallId}:languageKey`),
+      redisClient.del(`${originCallId}:mediatorCallSid`),
     ]);
   },
 );
