@@ -149,7 +149,7 @@ const sendHangupResponse = (res: Response, twiml: VoiceResponse) => {
 const sendLanguageErrorResponse = (res: Response, twiml: VoiceResponse) => {
   twiml.say(
     { language: 'it-IT' },
-    'Siamo spiacenti, non abbiamo riconosciuto questa lingua oppure la lingua non è supportata Riprova più tardi',
+    "Siamo spiacenti, la lingua richiesta non è stata riconosciuta oppure non è attualmente supportata. Ti invitiamo a riprovare con un'altra lingua.",
   );
   sendHangupResponse(res, twiml);
 };
@@ -161,7 +161,7 @@ const sendFallbackResponse = (
 ) => {
   twiml.say(
     { language: 'it-IT' },
-    'Non abbiamo riconosciuto una lingua supportata Attendi mentre ti colleghiamo a un operatore',
+    'Nessun interprete disponibile per la lingua richiesta. Attendi in linea. Ti stiamo collegando a un operatore.',
   );
   twiml.dial(fallbackPhoneNumber);
   res.type('text/xml');
@@ -182,6 +182,13 @@ export const pinCodeRequest = convertMiddlewareToAsync(async (req, res) => {
     `[Twilio][${originCallId}] requesting PIN for client=${client}, attempt=${attempt + 1}/${MAX_PIN_ATTEMPTS}`,
   );
 
+  if (attempt === 0) {
+    twiml.say(
+      { language: 'it-IT' },
+      'Benvenuto nel servizio di phone interpreting per ASST LARIANA.',
+    );
+  }
+
   const gather = twiml.gather({
     input: ['dtmf'],
     numDigits: 3,
@@ -194,8 +201,8 @@ export const pinCodeRequest = convertMiddlewareToAsync(async (req, res) => {
   gather.say(
     { language: 'it-IT' },
     attempt > 0
-      ? 'Inserisci nuovamente il tuo PIN di tre cifre'
-      : 'Inserisci il tuo PIN di tre cifre',
+      ? 'Il PIN inserito non è corretto. Inseriscilo nuovamente.'
+      : 'Inserisci il tuo codice PIN di tre cifre.',
   );
 
   res.type('text/xml');
@@ -266,8 +273,8 @@ export const languageCodeRequest = convertMiddlewareToAsync(
       gather.say(
         { language: 'it-IT' },
         isRetry
-          ? 'Non abbiamo riconosciuto una lingua supportata Indica nuovamente la lingua di cui hai bisogno'
-          : 'Indica la lingua di cui hai bisogno',
+          ? 'Non abbiamo riconosciuto la lingua richiesta. Indica nuovamente la lingua di cui hai bisogno.'
+          : 'Indica la lingua per la quale hai bisogno di un interprete.',
       );
     } catch (error) {
       logger.error(
@@ -277,7 +284,7 @@ export const languageCodeRequest = convertMiddlewareToAsync(
       if (vars.fallbackPhoneNumber) {
         twiml.say(
           { language: 'it-IT' },
-          'Attendi mentre ti colleghiamo a un operatore',
+          'Nessun interprete disponibile per la lingua richiesta. Attendi in linea. Ti stiamo collegando a un operatore.',
         );
         twiml.dial(vars.fallbackPhoneNumber);
       } else {
@@ -336,7 +343,7 @@ export const languageCodeValidation = convertMiddlewareToAsync(
       }
       twiml.say(
         { language: 'it-IT' },
-        `Grazie Hai selezionato ${languageKey} Ti stiamo collegando a un interprete per la lingua ${languageKey}`,
+        `Grazie. Hai richiesto un interprete di lingua ${languageKey}. Resta in attesa mentre effettuiamo il collegamento.`,
       );
       twiml.redirect(
         `./callInterpreter?languageKey=${encodeURIComponent(languageKey)}`,
@@ -663,7 +670,7 @@ export const connecting = convertMiddlewareToAsync(async (req, res) => {
     {
       language: 'it-IT',
     },
-    `Attendi mentre ti colleghiamo a un interprete per la lingua ${languageKey}`,
+    `La ricerca di un interprete di lingua ${languageKey} è ancora in corso. Rimani in linea.`,
   );
   twiml.play({ loop: 1 }, vars.twilio.waitMusicUrl);
   twiml.redirect(
