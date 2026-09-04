@@ -634,7 +634,15 @@ export const conferenceStatusResult = convertMiddlewareToAsync(
 
     const { StatusCallbackEvent } = req.body;
     const originCallId = String(req.query.originCallId ?? '');
-    if (StatusCallbackEvent !== 'participant-leave') {
+    logger.info(
+      `[Twilio][${originCallId}] conference status callback received: ` +
+        `event=${StatusCallbackEvent ?? 'unknown'}, conferenceSid=${req.body?.ConferenceSid ?? 'unknown'}`,
+    );
+
+    if (
+      StatusCallbackEvent !== 'leave' &&
+      StatusCallbackEvent !== 'participant-leave'
+    ) {
       return;
     }
 
