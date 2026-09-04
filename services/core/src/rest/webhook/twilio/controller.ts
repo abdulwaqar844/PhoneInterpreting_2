@@ -266,7 +266,9 @@ export const languageCodeRequest = convertMiddlewareToAsync(
         input: ['speech'],
         speechTimeout: 'auto',
         timeout: 5,
-        action: `${TWILIO_WEBHOOK}/languageCodeValidation`,
+        action:
+          `${TWILIO_WEBHOOK}/languageCodeValidation?attempt=` +
+          `${Number.isFinite(attempt) ? attempt : 0}`,
         method: 'POST',
         hints: supportedLanguageNames.join(','),
       });
