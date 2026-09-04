@@ -18,6 +18,10 @@ import { twilioClient } from '../../../config/twilio';
 import { redisClient } from '../../../config/redis';
 import { vars } from '../../../config/vars';
 import { logger } from '../../../config/logger';
+import {
+  DEFAULT_CLIENT,
+  getClientPin,
+} from '../../../const/client/clientPins';
 
 const removeAndCallNewTargets = async ({
   originCallId,
@@ -168,6 +172,81 @@ const sendFallbackResponse = (
 };
 
 const MAX_LANGUAGE_ATTEMPTS = 2;
+
+const MAX_PIN_ATTEMPTS = 2;
+
+export const pinCodeRequest = convertMiddlewareToAsync(async (req, res) => {
+  const twiml = new VoiceResponse();
+  const originCallId = String(req.body?.CallSid ?? 'unknown');
+  const client = String(req.query.client ?? DEFAULT_CLIENT);
+  const attempt = Number(req.query.attempt ?? 0);
+
+  logger.info(
+    `[Twilio][${originCallId}] requesting PIN for client=${client}, attempt=${attempt + 1}/${MAX_PIN_ATTEMPTS}`,
+  );
+
+  const gather = twiml.gather({
+    input: ['dtmf'],
+    numDigits: 3,
+    timeout: 5,
+    action:
+      `${TWILIO_WEBHOOK}/pinCodeValidation?client=${encodeURIComponent(client)}` +
+      `&attempt=${Number.isFinite(attempt) ? attempt : 0}`,
+    method: 'POST',
+  });
+  gather.say(
+    { language: 'en-US' },
+    attempt > 0
+      ? 'Please enter your three-digit PIN again.'
+      : 'Please enter your three-digit PIN.',
+  );
+
+  res.type('text/xml');
+  res.send(twiml.toString());
+});
+
+export const pinCodeValidation = convertMiddlewareToAsync(async (req, res) => {
+  const twiml = new VoiceResponse();
+  const originCallId = String(req.body?.CallSid ?? 'unknown');
+  const client = String(req.query.client ?? DEFAULT_CLIENT);
+  const attempt = Number(req.query.attempt ?? 0);
+  const enteredPin = String(req.body?.Digits ?? '');
+  const expectedPin = getClientPin(client);
+
+  if (expectedPin && enteredPin === expectedPin) {
+    logger.info(`[Twilio][${originCallId}] PIN validated for client=${client}`);
+    twiml.redirect(`${TWILIO_WEBHOOK}/languageCodeRequest`);
+    res.type('text/xml');
+    res.send(twiml.toString());
+    return;
+  }
+
+  if (Number.isFinite(attempt) && attempt < MAX_PIN_ATTEMPTS - 1) {
+    const nextAttempt = attempt + 1;
+    logger.warn(
+      `[Twilio][${originCallId}] invalid PIN for client=${client}; requesting retry ${nextAttempt + 1}/${MAX_PIN_ATTEMPTS}`,
+    );
+    twiml.redirect(
+      `${TWILIO_WEBHOOK}/pinCodeRequest?client=${encodeURIComponent(client)}` +
+        `&attempt=${nextAttempt}`,
+    );
+  } else if (vars.fallbackPhoneNumber) {
+    logger.warn(
+      `[Twilio][${originCallId}] PIN validation failed after ${MAX_PIN_ATTEMPTS} attempts; routing to fallback`,
+    );
+    sendFallbackResponse(res, twiml, vars.fallbackPhoneNumber);
+    return;
+  } else {
+    logger.warn(
+      `[Twilio][${originCallId}] PIN validation failed and fallback is unavailable; hanging up`,
+    );
+    sendLanguageErrorResponse(res, twiml);
+    return;
+  }
+
+  res.type('text/xml');
+  res.send(twiml.toString());
+});
 
 export const languageCodeRequest = convertMiddlewareToAsync(
   async (req, res) => {

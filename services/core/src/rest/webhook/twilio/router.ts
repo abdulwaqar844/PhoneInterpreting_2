@@ -1,7 +1,23 @@
 import { Router } from 'express';
 import * as controller from './controller';
+import * as cacheController from './cacheController';
 
 const twilioRouter = Router();
+
+twilioRouter.post(
+    '/cache/invalidate',
+    cacheController.invalidateCache,
+);
+
+twilioRouter.post(
+    '/pinCodeRequest',
+    controller.pinCodeRequest,
+);
+
+twilioRouter.post(
+    '/pinCodeValidation',
+    controller.pinCodeValidation,
+);
 
 twilioRouter.post(
     '/languageCodeRequest',

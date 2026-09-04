@@ -50,3 +50,30 @@ sudo docker compose -p hospital-phone -f deploy/live/docker-compose.yml ps
 ```bash
 sudo docker system prune -a
 ```
+
+## Cache Invalidation Webhook
+
+Call this webhook after updating the `languages` or `mediator` tables so the
+next request loads fresh data from PostgreSQL:
+
+```bash
+curl -X POST https://your-domain/api/webhook/twilio/cache/invalidate
+```
+
+The webhook invalidates the language cache, all interpreter lookup caches, and
+the mediator snapshot cache if it exists. It does not require a request body;
+the caches are repopulated lazily on the next lookup.
+
+Successful response example:
+
+```json
+{
+  "success": true,
+  "deletedKeys": 12,
+  "invalidated": {
+    "languages": true,
+    "interpreters": true,
+    "mediators": true
+  }
+}
+```

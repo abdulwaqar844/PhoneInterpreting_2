@@ -43,7 +43,7 @@ type LanguageRecord = {
   languageName: string;
 };
 
-const LANGUAGE_CACHE_KEY = 'languages:all:v2';
+export const LANGUAGE_CACHE_KEY = 'languages:all:v2';
 const LANGUAGE_CACHE_TTL_SECONDS = 24 * 60 * 60;
 
 let languageCache: LanguageRecord[] | undefined;
