@@ -18,10 +18,7 @@ import { twilioClient } from '../../../config/twilio';
 import { redisClient } from '../../../config/redis';
 import { vars } from '../../../config/vars';
 import { logger } from '../../../config/logger';
-import {
-  DEFAULT_CLIENT,
-  getClientPin,
-} from '../../../const/client/clientPins';
+import { DEFAULT_CLIENT, getClientPin } from '../../../const/client/clientPins';
 
 const removeAndCallNewTargets = async ({
   originCallId,
@@ -151,8 +148,8 @@ const sendHangupResponse = (res: Response, twiml: VoiceResponse) => {
 
 const sendLanguageErrorResponse = (res: Response, twiml: VoiceResponse) => {
   twiml.say(
-    { language: 'en-US' },
-    'Sorry, we could not recognize or support that language. Please try again later.',
+    { language: 'it-IT' },
+    'Siamo spiacenti, non abbiamo riconosciuto questa lingua oppure la lingua non è supportata Riprova più tardi',
   );
   sendHangupResponse(res, twiml);
 };
@@ -163,8 +160,8 @@ const sendFallbackResponse = (
   fallbackPhoneNumber: string,
 ) => {
   twiml.say(
-    { language: 'en-US' },
-    'We could not recognize a supported language. Please wait while we connect you to an operator.',
+    { language: 'it-IT' },
+    'Non abbiamo riconosciuto una lingua supportata Attendi mentre ti colleghiamo a un operatore',
   );
   twiml.dial(fallbackPhoneNumber);
   res.type('text/xml');
@@ -195,10 +192,10 @@ export const pinCodeRequest = convertMiddlewareToAsync(async (req, res) => {
     method: 'POST',
   });
   gather.say(
-    { language: 'en-US' },
+    { language: 'it-IT' },
     attempt > 0
-      ? 'Please enter your three-digit PIN again.'
-      : 'Please enter your three-digit PIN.',
+      ? 'Inserisci nuovamente il tuo PIN di tre cifre'
+      : 'Inserisci il tuo PIN di tre cifre',
   );
 
   res.type('text/xml');
@@ -267,10 +264,10 @@ export const languageCodeRequest = convertMiddlewareToAsync(
         hints: supportedLanguageNames.join(','),
       });
       gather.say(
-        { language: 'en-US' },
+        { language: 'it-IT' },
         isRetry
-          ? 'We did not recognize a supported language. Please say the language you need again.'
-          : 'Please say the language you need.',
+          ? 'Non abbiamo riconosciuto una lingua supportata Indica nuovamente la lingua di cui hai bisogno'
+          : 'Indica la lingua di cui hai bisogno',
       );
     } catch (error) {
       logger.error(
@@ -279,8 +276,8 @@ export const languageCodeRequest = convertMiddlewareToAsync(
       );
       if (vars.fallbackPhoneNumber) {
         twiml.say(
-          { language: 'en-US' },
-          'Please wait while we connect you to an operator.',
+          { language: 'it-IT' },
+          'Attendi mentre ti colleghiamo a un operatore',
         );
         twiml.dial(vars.fallbackPhoneNumber);
       } else {
@@ -337,6 +334,10 @@ export const languageCodeValidation = convertMiddlewareToAsync(
         sendLanguageErrorResponse(res, twiml);
         return;
       }
+      twiml.say(
+        { language: 'it-IT' },
+        `Grazie Hai selezionato ${languageKey} Ti stiamo collegando a un interprete per la lingua ${languageKey}`,
+      );
       twiml.redirect(
         `./callInterpreter?languageKey=${encodeURIComponent(languageKey)}`,
       );
@@ -464,7 +465,9 @@ export const callInterpreter = convertMiddlewareToAsync(async (req, res) => {
       statusCallbackMethod: 'POST',
       endConferenceOnExit: true,
       maxParticipants: 2,
-      waitUrl: `${TWILIO_WEBHOOK}/connecting`,
+      waitUrl:
+        `${TWILIO_WEBHOOK}/connecting?languageKey=` +
+        encodeURIComponent(languageKey),
       waitMethod: 'POST',
     },
     originCallId,
@@ -568,7 +571,10 @@ export const machineDetectionResult = convertMiddlewareToAsync(
         }),
       );
     } else {
-      res.sendStatus(204);
+      const twiml = new VoiceResponse();
+      twiml.hangup();
+      res.type('text/xml');
+      res.send(twiml.toString());
 
       await twilioClient.calls(targetCallId).update({
         status: 'completed',
@@ -649,17 +655,20 @@ export const noAnswer = convertMiddlewareToAsync(async (_req, res) => {
   sendHangupResponse(res, twiml);
 });
 
-export const connecting = convertMiddlewareToAsync(async (_req, res) => {
+export const connecting = convertMiddlewareToAsync(async (req, res) => {
   const twiml = new VoiceResponse();
+  const languageKey = String(req.query.languageKey ?? 'the requested language');
 
   twiml.say(
     {
-      language: 'en-US',
+      language: 'it-IT',
     },
-    'Please wait while we connect you to an interpreter.',
+    `Attendi mentre ti colleghiamo a un interprete per la lingua ${languageKey}`,
   );
-  twiml.pause({ length: 8 });
-  twiml.redirect(`${TWILIO_WEBHOOK}/connecting`);
+  twiml.play({ loop: 1 }, vars.twilio.waitMusicUrl);
+  twiml.redirect(
+    `${TWILIO_WEBHOOK}/connecting?languageKey=${encodeURIComponent(languageKey)}`,
+  );
 
   res.type('text/xml');
   res.send(twiml.toString());
